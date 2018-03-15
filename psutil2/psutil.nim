@@ -9,7 +9,9 @@
 import
   strutils, os, times,
   terminal, typetraits, strformat,
-  sysconf
+  sysconf, sets, tables,
+  net, math, algorithm,
+  posix, sequtils
 
 # Constants: out of personal preference I've decided to start with lowercase letters
 let
@@ -24,29 +26,48 @@ type
   steal: float, guest: float, guestNice: float]
 
 # Procedures
-proc bootTime*():
+proc bootTime*(): float =
   ## Return the system boot time expressed in seconds since the epoch
   # only mildly edited from john scillieri's implemntation
   let stat_path = statFile
     for line in stat_path.lines:
-      if line.startswith("btime"):
-        return line.strip().split()[1].parseFloat()
+      if startswith(line, "btime"):
+        return parseFloat(split(stripWhitespace(line))[1]) # hope that works out properly, changed for consistency, admittedly, maybe less readable
   
     raise newException(OSError, "line 'btime' not found in $1" % stat_path)
 
 proc createTime(self: Process):
-  # this procedure is for getting the jiffies in a second.
-  # this is to keep as close to the python psutil, which gives times as floats
-  # which are the actual times divided by the user_hz and then adding the boot time
-  values = self.parseStatFile()
+  
+  values = parseStatFile(self)
   bt = boot_time()
-  return int(parseFloat(values[20])) / 
+  return int(parseFloat(values[20])) / clockTicks + bt
 
-proc getCpuTimes():
-  # just as the get_cpu_times function works in psutil we will return a tuple on the cpu times
+proc parseCpuTimeLine(test: string): CpuTime =
+  # This procedure is a much more efficient way of creating a CpuTime then my previous way
+  let
+    values = text.splitWhitespace()
+    let times = mapIt(values[1..<len(values)], parseFloat(it) / clockTicks.float) # must be a more consistent approach
+    
+  if len(times) >= 7:
+    for i in 0..<7: # I believe this should work fine, fingers crossed
+      result[i] = times[i]
+  if len(times) >= 8:
+    result.steal = times[7]
+  if len(times) >= 9:
+    result.guest = times[8]
+  if len(times) >= 10:
+    result.guest_nice = times[9]
+
+
+proc cpuTimes():
+  # just as the cpu_times function works in psutil we will return a tuple on the cpu times
   # the type returned is defined at the head of this file as cpuTime.
   #
   # Note: According to several sources, iowait is unreliable and inaccurate
+  # Also not every field is available on every system.
+  for line in lines(statFile):
+    result = parseCpuTimeLine(line)
+    break
 
 
 proc getCpuUsage(): float =
@@ -54,7 +75,8 @@ proc getCpuUsage(): float =
   # usage over the past ~1 second. using time on my machine comes out to 1.003 real seconds pretty 
   # evenly no matter when I run it
 
-  # Apologies for the extreme spagheti code 
+  # Apologies for the extreme spagheti code
+  # I'm already aware of several fixes 
 
   var 
     statFile1: File
@@ -132,3 +154,4 @@ proc getCpuUsage(): float =
 
 when isMainModule:
   echo getCpuUsage()
+  echo bootTime()
